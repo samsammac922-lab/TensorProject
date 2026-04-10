@@ -37,7 +37,9 @@ def predict(model_path: str, image_paths: list[str], class_names: list[str]) -> 
 
         if len(preds) == 1:          # binary
             prob  = float(preds[0])
-            label = class_names[1] if prob >= 0.5 else class_names[0]
+            negative_label = class_names[0] if len(class_names) >= 1 else "0"
+            positive_label = class_names[1] if len(class_names) >= 2 else "1"
+            label = positive_label if prob >= 0.5 else negative_label
             confidence = prob if prob >= 0.5 else 1 - prob
         else:                         # multi-class
             idx   = int(np.argmax(preds))

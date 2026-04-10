@@ -2,7 +2,7 @@
 
 A minimal yet production-ready CNN image-classification project that loads its training data from a **`data_training.tar.gz`** archive.
 
-> ⚠️ **Important:** The `data_training.tar.gz` file **must be manually decompressed** before running any script. The project reads data from the extracted `data/` directory — it will not work on the compressed archive directly. See [Data Format](#data-format) for exact decompression steps.
+> The training script extracts a valid `data_training.tar.gz` archive automatically. The archive can contain either an image-folder dataset or a raw-record binary plus metadata.
 
 ---
 
@@ -24,10 +24,12 @@ A minimal yet production-ready CNN image-classification project that loads its t
 
 ```
 .
-├── data_training.tar.gz   ← compressed archive (must be extracted first!)
-├── data/                  ← extracted data directory (required to train)
+├── data_training.tar.gz   ← compressed archive (train.py extracts automatically)
+├── data/                  ← extracted image dataset (optional format)
 │   ├── train/
 │   └── val/               (optional)
+├── data_training.bin      ← extracted raw-record binary dataset (optional format)
+├── data_training.meta.json← metadata for the raw binary dataset
 ├── train.py               ← main training script
 ├── predict.py             ← inference / prediction script
 ├── create_sample_data.py  ← helper: generate synthetic test data
@@ -67,7 +69,18 @@ git clone <your-repo-url>
 cd <project-folder>
 ```
 
-### 2 — Create a virtual environment
+### 2 — Recommended: one-command setup
+
+```bash
+./setup.sh
+```
+
+`setup.sh` does the following:
+
+- Uses a local virtual environment when `python3` is version `3.10` through `3.13`.
+- Falls back to building a `podman` image when the local Python version is not supported by TensorFlow.
+
+### 3 — Create a virtual environment manually
 
 ```bash
 # macOS / Linux
@@ -79,7 +92,7 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 ```
 
-### 3 — Install dependencies
+### 4 — Install dependencies
 
 ```bash
 pip install --upgrade pip
@@ -90,7 +103,7 @@ pip install -r requirements.txt
 > TensorFlow 2.15+ ships with built-in GPU support on Linux/Windows.  
 > Make sure your CUDA and cuDNN versions match the [TensorFlow compatibility matrix](https://www.tensorflow.org/install/pip#software_requirements).
 
-### 4 — Verify the installation
+### 5 — Verify the installation
 
 ```bash
 python - <<'EOF'
@@ -104,25 +117,9 @@ EOF
 
 ## Data Format
 
-### ⚠️ Step 1 — Decompress the archive (required)
+### Automatic extraction
 
-**The archive must be fully extracted before running any script.** The project reads images from the `data/` directory on disk — it does not read from the compressed file at runtime.
-
-Place `data_training.tar.gz` in the project root, then extract it:
-
-```bash
-# macOS / Linux
-tar -xzf data_training.tar.gz
-
-# Windows (PowerShell — built-in, no extra tools needed)
-tar -xzf data_training.tar.gz
-
-# Windows (Git Bash / WSL)
-tar -xzf data_training.tar.gz
-
-# Windows (7-Zip GUI alternative)
-# Right-click data_training.tar.gz → 7-Zip → Extract Here
-```
+When you run `python train.py`, the script inspects `data_training.tar.gz` and extracts it automatically if needed.
 
 After extraction you should see a `data/` folder in the project root:
 
@@ -136,6 +133,12 @@ After extraction you should see a `data/` folder in the project root:
 ```
 
 > Do **not** rename or move the `data/` folder — the training script expects it at that exact path.
+>
+> If extraction fails, the archive layout is wrong. A valid archive must contain one of:
+>
+> - `data/train/<class_name>/<image files>`
+> - `train/<class_name>/<image files>`
+> - `data_training.bin` and `data_training.meta.json`
 
 ---
 
@@ -158,23 +161,46 @@ data/
 - Sub-folder names become the class labels automatically.
 - If no `val/` folder is present, the script applies an 80 / 20 train-validation split automatically.
 
+### Raw binary layout
+
+For raw-record datasets, include `data_training.bin` and `data_training.meta.json` in the archive root.
+
+Example metadata:
+
+```json
+{
+  "feature_shape": [128, 128, 3],
+  "feature_dtype": "uint8",
+  "label_dtype": "uint8",
+  "label_bytes": 1,
+  "record_bytes": 49153,
+  "class_names": ["cat", "dog"],
+  "validation_split": 0.2
+}
+```
+
+Each record is interpreted as:
+
+- label bytes first
+- raw feature bytes after that
+
+By default the loader assumes labels are sparse integers and features are raw `uint8` pixels reshaped to `feature_shape`.
+
 ### Don't have real data yet?
 
-Generate a synthetic archive for quick testing, then extract it:
+Generate a synthetic archive for quick testing without overwriting the original training archive:
 
 ```bash
-python create_sample_data.py   # writes data_training.tar.gz (~2 MB)
-tar -xzf data_training.tar.gz  # extract before training
+python create_sample_data.py   # writes sample_data_training.tar.gz
+python create_sample_data.py --format raw-bin
+python train.py --archive sample_data_training.tar.gz
 ```
 
 ---
 
 ## Training
 
-> Before training, make sure you have extracted `data_training.tar.gz` as described in [Data Format](#data-format).
-
 ```bash
-tar -xzf data_training.tar.gz   # decompress first
 python train.py
 ```
 
@@ -192,7 +218,7 @@ python train.py --archive /datasets/my_data.tar.gz --epochs 50
 
 ### What happens during training
 
-1. **Extraction** — `data_training.tar.gz` is unpacked into `data/` (skipped on subsequent runs).
+1. **Extraction** — `data_training.tar.gz` is unpacked into `data/` automatically (skipped on subsequent runs).
 2. **Dataset construction** — `tf.data` pipelines with caching and prefetching.
 3. **Augmentation** — random horizontal flip, rotation ±10 °, zoom ±10 %.
 4. **Model** — 3-block CNN with BatchNorm, followed by GlobalAveragePooling + Dropout.
@@ -252,10 +278,12 @@ Edit them directly, or extend `parse_args()` to expose them as CLI flags.
 
 | Symptom | Fix |
 |---------|-----|
-| `FileNotFoundError: data/train` | The archive has not been extracted yet. Run `tar -xzf data_training.tar.gz` first. |
-| `FileNotFoundError: data_training.tar.gz` | Place the archive in the project root, then extract it. |
+| `FileNotFoundError: data/train` | The archive layout is invalid. Rebuild `data_training.tar.gz` so it contains `data/train/...`, `train/...`, or a valid raw binary pair. |
+| `data_training.meta.json is missing` | Raw binary archives require metadata describing record size, feature shape, and class names. |
+| `FileNotFoundError: data_training.tar.gz` | Place the archive in the project root. `train.py` will extract it automatically. |
 | `No images found` | Verify the archive structure matches the layout shown in [Data Format](#data-format). |
 | Out-of-memory (OOM) on GPU | Reduce `BATCH_SIZE` (e.g. 16 or 8). |
 | Training accuracy stuck near random | Check class balance; increase `EPOCHS`; lower `LEARNING_RATE`. |
 | `ModuleNotFoundError: tensorflow` | Activate the virtual environment: `source .venv/bin/activate`. |
+| TensorFlow install fails on Python 3.14+ | Run `./setup.sh` to use the `podman` fallback, or install Python 3.10-3.13 locally. |
 | CUDA errors on GPU | Verify CUDA/cuDNN versions with the [TF compatibility matrix](https://www.tensorflow.org/install/pip#software_requirements). |
